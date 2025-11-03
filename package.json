@@ -1,6 +1,6 @@
 {
   "name": "@cloudverse.ai/cli",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "CloudVerse.ai CLI - Developer-native FinOps cost Optimization AI Agent",
   "type": "module",
   "bin": {

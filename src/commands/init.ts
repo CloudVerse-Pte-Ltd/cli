@@ -22,7 +22,7 @@ export const initCommand = new Command('init')
           type: 'text',
           name: 'apiUrl',
           message: 'API endpoint URL:',
-          initial: 'http://localhost:5000',
+          initial: 'https://test-developer-finops.cloudverse.ai',
         },
         {
           type: 'password',
