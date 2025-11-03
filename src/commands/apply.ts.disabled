@@ -1,0 +1,130 @@
+import { Command } from 'commander';
+import chalk from 'chalk';
+import ora from 'ora';
+import { apiClient } from '../lib/api-client.js';
+import { loadConfig } from '../lib/config.js';
+import fs from 'fs';
+import path from 'path';
+
+export const applyCommand = new Command('apply')
+  .description('Apply a cost optimization recommendation to your IaC files')
+  .argument('<recommendation-id>', 'ID of the recommendation to apply')
+  .option('-o, --output <path>', 'Output path for modified IaC file')
+  .option('--no-preview', 'Skip preview and apply directly')
+  .option('--download', 'Download the modified file after applying')
+  .action(async (recommendationId: string, options) => {
+    const config = loadConfig();
+    
+    if (!config.apiKey) {
+      console.error(chalk.red('✗ API key not configured'));
+      console.log('\nRun', chalk.cyan('cloudverse init'), 'to configure your API key');
+      process.exit(1);
+    }
+
+    const spinner = ora('Loading recommendation details...').start();
+    
+    try {
+      // Get recommendation details
+      const recommendation = await apiClient.get(`/api/recommendations/${recommendationId}`);
+      
+      if (!recommendation) {
+        spinner.fail(chalk.red('Recommendation not found'));
+        process.exit(1);
+      }
+
+      spinner.succeed(chalk.green('Recommendation loaded'));
+      
+      // Display recommendation details
+      console.log('\n' + chalk.bold('Recommendation:'), chalk.cyan(recommendation.title));
+      console.log(chalk.gray(recommendation.description));
+      console.log('\n' + chalk.bold('Estimated Savings:'), chalk.green(`$${parseFloat(recommendation.potentialMonthlySavings).toFixed(2)}/month`));
+      console.log(chalk.bold('Effort Required:'), chalk.yellow(recommendation.effortRequired));
+      console.log(chalk.bold('Risk Level:'), recommendation.riskLevel === 'low' ? chalk.green(recommendation.riskLevel) : chalk.yellow(recommendation.riskLevel));
+      
+      // Preview changes
+      if (options.preview !== false) {
+        spinner.start('Generating preview...');
+        
+        const preview = await apiClient.post(`/api/recommendations/${recommendationId}/preview`);
+        
+        spinner.succeed(chalk.green('Preview generated'));
+        
+        console.log('\n' + chalk.bold.underline('Changes Summary:'));
+        
+        if (preview.preview.changeLog && preview.preview.changeLog.length > 0) {
+          preview.preview.changeLog.forEach((change: any) => {
+            console.log(`\n  ${chalk.cyan('•')} ${chalk.bold(change.type)}: ${change.description}`);
+            if (change.oldValue && change.newValue) {
+              console.log(`    ${chalk.red(change.oldValue)} → ${chalk.green(change.newValue)}`);
+            }
+          });
+        }
+        
+        console.log('\n' + chalk.bold.underline('Git-Style Diff:'));
+        console.log('\n' + preview.preview.diff);
+        
+        // Ask for confirmation
+        const readline = await import('readline');
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout
+        });
+        
+        const shouldApply = await new Promise<boolean>((resolve) => {
+          rl.question(chalk.yellow('\nApply this recommendation? (y/N): '), (answer) => {
+            rl.close();
+            resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes');
+          });
+        });
+        
+        if (!shouldApply) {
+          console.log(chalk.gray('\nApply cancelled'));
+          process.exit(0);
+        }
+      }
+      
+      // Apply recommendation
+      spinner.start('Applying recommendation...');
+      
+      const result = await apiClient.post(`/api/recommendations/${recommendationId}/apply`);
+      
+      spinner.succeed(chalk.green('Recommendation applied successfully!'));
+      
+      console.log('\n' + chalk.bold('Applied Recommendation ID:'), result.appliedRecommendationId);
+      console.log(chalk.gray(result.message));
+      
+      // Download modified file if requested
+      if (options.download || options.output) {
+        spinner.start('Downloading modified IaC file...');
+        
+        const response = await fetch(`${config.apiEndpoint}/api/applied-recommendations/${result.appliedRecommendationId}/download`, {
+          headers: {
+            'Authorization': `Bearer ${config.apiKey}`
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to download modified file');
+        }
+        
+        const content = await response.text();
+        const outputPath = options.output || 'infrastructure-modified.tf';
+        
+        fs.writeFileSync(outputPath, content, 'utf-8');
+        
+        spinner.succeed(chalk.green(`Modified file saved to ${outputPath}`));
+      } else {
+        console.log('\n' + chalk.cyan('Tip:'), 'Use', chalk.white('--download'), 'to save the modified IaC file locally');
+      }
+      
+      console.log('\n' + chalk.bold('Next Steps:'));
+      console.log(`  1. Review the changes in the modified file`);
+      console.log(`  2. Apply the changes to your infrastructure`);
+      console.log(`  3. If you need to rollback, use: ${chalk.cyan(`cloudverse rollback ${result.appliedRecommendationId}`)}`);
+      
+    } catch (error) {
+      spinner.fail(chalk.red('Failed to apply recommendation'));
+      console.error(chalk.red('\nError:'), error instanceof Error ? error.message : 'Unknown error');
+      process.exit(1);
+    }
+  });

@@ -1,0 +1,77 @@
+import { Command } from 'commander';
+import chalk from 'chalk';
+import ora from 'ora';
+import { apiClient } from '../lib/api-client.js';
+import { loadConfig } from '../lib/config.js';
+
+export const rollbackCommand = new Command('rollback')
+  .description('Rollback an applied cost optimization recommendation')
+  .argument('<applied-id>', 'ID of the applied recommendation to rollback')
+  .action(async (appliedId: string) => {
+    const config = loadConfig();
+    
+    if (!config.apiKey) {
+      console.error(chalk.red('✗ API key not configured'));
+      console.log('\nRun', chalk.cyan('cloudverse init'), 'to configure your API key');
+      process.exit(1);
+    }
+
+    const spinner = ora('Loading applied recommendation...').start();
+    
+    try {
+      // Get applied recommendation details
+      const appliedRec = await apiClient.get(`/api/applied-recommendations/${appliedId}`);
+      
+      if (!appliedRec) {
+        spinner.fail(chalk.red('Applied recommendation not found'));
+        process.exit(1);
+      }
+
+      if (appliedRec.status === 'rolled_back') {
+        spinner.warn(chalk.yellow('This recommendation has already been rolled back'));
+        process.exit(0);
+      }
+
+      spinner.succeed(chalk.green('Applied recommendation loaded'));
+      
+      console.log('\n' + chalk.bold('Applied Recommendation ID:'), appliedRec.id);
+      console.log(chalk.bold('Status:'), appliedRec.status);
+      console.log(chalk.bold('Applied At:'), new Date(appliedRec.appliedAt).toLocaleString());
+      
+      // Ask for confirmation
+      const readline = await import('readline');
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+      });
+      
+      const shouldRollback = await new Promise<boolean>((resolve) => {
+        rl.question(chalk.yellow('\nRollback this recommendation? This will restore the original IaC content. (y/N): '), (answer) => {
+          rl.close();
+          resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes');
+        });
+      });
+      
+      if (!shouldRollback) {
+        console.log(chalk.gray('\nRollback cancelled'));
+        process.exit(0);
+      }
+      
+      // Rollback recommendation
+      spinner.start('Rolling back recommendation...');
+      
+      const result = await apiClient.post(`/api/applied-recommendations/${appliedId}/rollback`);
+      
+      spinner.succeed(chalk.green('Recommendation rolled back successfully!'));
+      
+      console.log('\n' + chalk.gray(result.message));
+      console.log('\n' + chalk.bold('Next Steps:'));
+      console.log(`  1. The original IaC content has been restored`);
+      console.log(`  2. You can re-apply the recommendation if needed`);
+      
+    } catch (error) {
+      spinner.fail(chalk.red('Failed to rollback recommendation'));
+      console.error(chalk.red('\nError:'), error instanceof Error ? error.message : 'Unknown error');
+      process.exit(1);
+    }
+  });
